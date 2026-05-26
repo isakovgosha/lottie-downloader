@@ -1,8 +1,136 @@
 # Lottie Downloader
 
-**Chrome / Yandex Browser extension** that detects, previews and downloads Lottie animations from any website.
+**Расширение для Chrome и Яндекс Браузера**, которое автоматически находит, показывает превью и скачивает Lottie-анимации с любого сайта.
 
-[Русская версия](README.ru.md)
+![Версия](https://img.shields.io/badge/версия-1.1.0-6366f1)
+![Manifest](https://img.shields.io/badge/manifest-v3-6366f1)
+![Лицензия](https://img.shields.io/badge/лицензия-MIT-22c55e)
+
+---
+
+## Возможности
+
+- **Авто-обнаружение** — перехватывает анимации, загружаемые через `lottie.loadAnimation()`, `fetch`, `XHR`, файлы `.lottie` (dotLottie ZIP) и веб-компоненты (`lottie-player`, `dotlottie-player`, `lottie-animation`)
+- **Превью анимаций** — наведите на карточку в попапе, чтобы воспроизвести анимацию
+- **Скачивание одним кликом** — сохраняет оригинальный JSON-файл в папку «Загрузки»
+- **Скачать все** — пакетная загрузка всех найденных анимаций сразу
+- **Оверлей на странице** — поверх каждой найденной анимации появляется кнопка скачивания прямо на сайте
+- **Подсветка и скролл** — кнопка «👁 Найти» в попапе вспыхивает и прокручивает страницу к нужной анимации
+- **Сканирование DOM** — находит уже отрисованные SVG-анимации, даже если библиотека не доступна через `window`
+- **Поддержка dotLottie** — распаковывает `.lottie` ZIP-архивы (deflate-raw)
+- **Устойчивость к перезапуску** — анимации кэшируются в `session storage` и переживают перезапуск Service Worker (для файлов до 150 КБ)
+- **Дедупликация** — один и тот же файл не появится в списке дважды
+
+---
+
+## Установка
+
+> Расширение пока не опубликовано в Chrome Web Store. Устанавливается вручную как распакованное расширение.
+
+1. Скачайте или клонируйте этот репозиторий
+2. Откройте Chrome (или Яндекс Браузер) и перейдите на `chrome://extensions/`
+3. Включите **Режим разработчика** (переключатель в правом верхнем углу)
+4. Нажмите **Загрузить распакованное**
+5. Выберите папку, в которой находится `manifest.json`
+
+Иконка расширения появится на панели инструментов. Откройте любой сайт с Lottie-анимациями и нажмите на иконку.
+
+---
+
+## Как пользоваться
+
+| Действие | Как выполнить |
+|----------|---------------|
+| Посмотреть найденные анимации | Нажать на иконку расширения |
+| Воспроизвести анимацию | Навести курсор на миниатюру в попапе |
+| Скачать одну анимацию | Нажать **↓ JSON** на карточке |
+| Скачать все анимации | Нажать **↓ Скачать все** на панели |
+| Повторно просканировать страницу | Нажать **↻ Обновить** |
+| Очистить список | Нажать **✕ Очистить** |
+| Найти анимацию на странице | Нажать **👁 Найти** на карточке |
+| Скачать прямо со страницы | Нажать кнопку **▼ Lottie** над анимацией |
+
+---
+
+## Как это работает
+
+```
+Страница (MAIN world)               ISOLATED world           Service Worker
+─────────────────────               ──────────────           ──────────────
+injected.js перехватывает:          content_script.js        background.js
+  lottie.loadAnimation()       →    ретранслирует        →   сохраняет запись
+  window.fetch                 →    postMessage              уведомляет попап
+  XMLHttpRequest               →    через sendMessage
+  MutationObserver (веб-компоненты)
+  DOM-сканирование (SVG / canvas)
+  dotLottie ZIP-парсер
+```
+
+`injected.js` выполняется в **MAIN world** вместе со скриптами страницы — это позволяет перехватить библиотеку Lottie до того, как загрузится первая анимация. Он общается с `content_script.js` (ISOLATED world) через `window.postMessage`. Контент-скрипт пересылает всё в фоновый Service Worker, который хранит данные и управляет скачиванием.
+
+---
+
+## Структура проекта
+
+```
+├── manifest.json           — MV3-манифест расширения
+├── background.js           — Service Worker: хранилище, скачивание, диспетчер сообщений
+├── content_script.js       — ISOLATED world: мост + управление оверлеями на странице
+├── injected.js             — MAIN world: хуки fetch/XHR/lottie API, сканирование DOM
+├── popup.html / popup.js   — UI всплывающего окна расширения
+├── popup-animations.js     — Данные UI-анимаций (встроены в код, без внешних файлов)
+├── styles.css              — Стили оверлеев, инжектируемые в страницу
+├── lottie_light.min.js     — Bundled lottie-web (light) для превью в попапе
+└── icons/                  — Иконки расширения (16 / 48 / 128 px)
+```
+
+---
+
+## Совместимость браузеров
+
+| Браузер | Поддержка |
+|---------|-----------|
+| Chrome 116+ | ✅ Полная поддержка |
+| Яндекс Браузер | ✅ Полная поддержка (fallback для старых сборок без `world: MAIN`) |
+| Edge 116+ | ✅ Должен работать (на базе Chromium) |
+| Firefox | ❌ Не поддерживается (MV3 + `world: MAIN` недоступны) |
+
+---
+
+## Зависимости
+
+| Библиотека | Версия | Лицензия | Использование |
+|------------|--------|----------|---------------|
+| [lottie-web](https://github.com/airbnb/lottie-web) | 5.x (light) | MIT | Воспроизведение анимаций в превью попапа |
+
+`lottie_light.min.js` включён напрямую в репозиторий — сборка не требуется.
+
+---
+
+## Известные ограничения
+
+- Анимации тяжелее **150 КБ** (сериализованный JSON) не кэшируются в `session storage`. После перезапуска Service Worker (Chrome завершает неактивные SW примерно через 30 с) превью и скачивание таких анимаций будут недоступны до повторного сканирования страницы.
+- Анимации, **скомпилированные внутрь JS-бандла** без вызова `lottie.loadAnimation()`, не могут быть извлечены.
+- Файлы `.lottie` со сжатием, отличным от `deflate-raw` (метод 8), не декомпрессируются в браузерах без поддержки `DecompressionStream` API.
+
+---
+
+## Лицензия
+
+MIT — подробности в файле [LICENSE](LICENSE).
+
+---
+
+## Автор
+
+Сделано [OneGog](https://t.me/onegog_design)
+
+---
+---
+
+# Lottie Downloader
+
+**Chrome / Yandex Browser extension** that detects, previews and downloads Lottie animations from any website.
 
 ![Version](https://img.shields.io/badge/version-1.1.0-6366f1)
 ![Manifest](https://img.shields.io/badge/manifest-v3-6366f1)
@@ -68,8 +196,6 @@ injected.js hooks:               content_script.js        background.js
   dotLottie ZIP parser
 ```
 
-`injected.js` runs in the **MAIN world** alongside page scripts so it can intercept the Lottie library before any animation is loaded. It communicates with `content_script.js` (ISOLATED world) via `window.postMessage`. The content script forwards everything to the background service worker, which stores animation data and handles downloads.
-
 ---
 
 ## Project structure
@@ -80,10 +206,9 @@ injected.js hooks:               content_script.js        background.js
 ├── content_script.js      — ISOLATED world bridge + page overlay management
 ├── injected.js            — MAIN world hooks (fetch, XHR, lottie API, DOM scan)
 ├── popup.html / popup.js  — Extension popup UI
+├── popup-animations.js    — Inlined UI animation data (no loose JSON files)
 ├── styles.css             — Page-injected overlay styles
 ├── lottie_light.min.js    — Bundled lottie-web (light build) for popup previews
-├── Motor.json             — UI animation: header logo
-├── Lupa.json              — UI animation: empty state
 └── icons/                 — Extension icons (16 / 48 / 128 px)
 ```
 
@@ -106,15 +231,15 @@ injected.js hooks:               content_script.js        background.js
 |---------|---------|---------|-------|
 | [lottie-web](https://github.com/airbnb/lottie-web) | 5.x (light build) | MIT | Animation rendering in popup previews |
 
-`lottie_light.min.js` is bundled directly (no npm/build step required).
+`lottie_light.min.js` is bundled directly — no build step required.
 
 ---
 
 ## Known limitations
 
-- Animations larger than **150 KB** (serialized JSON) are not cached in `session storage`. After the Service Worker restarts (Chrome terminates idle SWs after ~30 s), previews and downloads for such animations will be unavailable until the page is rescanned.
-- Animations that are **compiled into JavaScript bundles** without being passed through `lottie.loadAnimation()` cannot be extracted.
-- `dotLottie` files with compression other than `deflate-raw` (method 8) are not decompressed on browsers without `DecompressionStream` API support.
+- Animations larger than **150 KB** (serialized JSON) are not cached in `session storage`. After the Service Worker restarts, previews and downloads for such animations will be unavailable until the page is rescanned.
+- Animations **compiled into JavaScript bundles** without going through `lottie.loadAnimation()` cannot be extracted.
+- `.lottie` files with compression other than `deflate-raw` (method 8) are not decompressed on browsers without the `DecompressionStream` API.
 
 ---
 

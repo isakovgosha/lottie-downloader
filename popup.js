@@ -9,31 +9,11 @@
   var _refreshTimer = null; // дебаунс для ANIMATIONS_UPDATED — предотвращает конкурентные render()
 
   // ── Lottie-анимации в UI ──────────────────────────────────────────────────
-  // Загружаем JSON через fetch с правильным extension URL,
-  // затем передаём как animationData (безопасно для CSP в MV3)
-  function loadLottieUI(containerId, filename, loop) {
-    var container = document.getElementById(containerId);
-    if (!container) return;
-    var url = chrome.runtime.getURL(filename);
-    fetch(url)
-      .then(function (resp) { return resp.json(); })
-      .then(function (data) {
-        lottie.loadAnimation({
-          container: container,
-          renderer: 'svg',
-          loop: loop !== false,
-          autoplay: true,
-          animationData: data,
-        });
-      })
-      .catch(function (e) {
-        console.warn('[LDA] Failed to load', filename, e);
-      });
-  }
-
   function initUIAnimations() {
-    loadLottieUI('header-motor', 'Motor.json', true);
-    loadLottieUI('empty-lupa',   'Lupa.json',  true);
+    var motor = document.getElementById('header-motor');
+    if (motor) lottie.loadAnimation({ container: motor, renderer: 'svg', loop: true, autoplay: true, animationData: LDA_MOTOR_DATA });
+    var lupa = document.getElementById('empty-lupa');
+    if (lupa) lottie.loadAnimation({ container: lupa, renderer: 'svg', loop: true, autoplay: true, animationData: LDA_LUPA_DATA });
   }
 
   // Открыть ссылку автора через chrome.tabs (target="_blank" в popup не работает)

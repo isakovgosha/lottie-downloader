@@ -33,7 +33,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["injected.js", "Motor.json", "Lupa.json"],
+      "resources": ["injected.js"],
       "matches": ["<all_urls>"]
     }
   ],
