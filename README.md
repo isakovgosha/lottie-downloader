@@ -2,6 +2,8 @@
 
 **Chrome / Yandex Browser extension** that detects, previews and downloads Lottie animations from any website.
 
+[Русская версия](README.ru.md)
+
 ![Version](https://img.shields.io/badge/version-1.1.0-6366f1)
 ![Manifest](https://img.shields.io/badge/manifest-v3-6366f1)
 ![License](https://img.shields.io/badge/license-MIT-22c55e)
