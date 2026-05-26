@@ -1,0 +1,70 @@
+/* Lottie Downloader — overlay styles, injected into all pages */
+
+.lda-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2147483646;
+  border: 2px solid rgba(99, 102, 241, 0.85);
+  border-radius: 4px;
+  background: rgba(99, 102, 241, 0.08);
+  box-sizing: border-box;
+  pointer-events: none;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 6px;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.lda-overlay:hover {
+  background: rgba(99, 102, 241, 0.18);
+}
+
+.lda-overlay.lda-flash {
+  background: rgba(251, 191, 36, 0.28) !important;
+  border-color: rgb(245, 158, 11) !important;
+  transition: none;
+}
+
+.lda-download-btn {
+  pointer-events: all;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(79, 70, 229, 0.95);
+  color: #ffffff;
+  border: none;
+  border-radius: 5px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  line-height: 1;
+  text-decoration: none;
+  outline: none;
+  transition: background 0.15s, transform 0.1s;
+  user-select: none;
+}
+
+.lda-download-btn:hover {
+  background: rgb(67, 56, 202);
+  transform: scale(1.04);
+}
+
+.lda-download-btn:active {
+  transform: scale(0.97);
+}
+
+.lda-download-btn:disabled {
+  background: rgb(109, 191, 115);
+  cursor: default;
+  transform: none;
+}
+
+.lda-icon {
+  font-size: 10px;
+  line-height: 1;
+}
