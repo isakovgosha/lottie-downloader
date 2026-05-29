@@ -263,6 +263,8 @@
         try {
           resp.clone().text().then(function (text) {
             tryEmitJson(text, url, 'fetch', null);
+            // Сканируем JSON-ответ на вложенные URL анимаций (напр. getSmile → getfile?lottie=true)
+            _ldaScanJsonForUrls(text, url);
           }).catch(function () {});
         } catch (e) {}
       }).catch(function () {});
@@ -270,6 +272,38 @@
 
     return promise;
   };
+
+  // Ищем в JSON-ответах строковые поля с URL на TGS/Lottie и скачиваем их
+  var _ldaScannedUrls = new Set();
+  function _ldaScanJsonForUrls(text, parentUrl) {
+    if (!text || text[0] !== '{' && text[0] !== '[') return;
+    try {
+      var obj = JSON.parse(text);
+      (function scan(v, depth) {
+        if (depth > 5 || !v) return;
+        if (typeof v === 'string') {
+          if (v.length > 8 && v.length < 2000 && /lottie=true|\.tgs(\?|$)|lottie.*\.json/.test(v)
+              && !_ldaScannedUrls.has(v)) {
+            _ldaScannedUrls.add(v);
+            var fn = window.__ldaOriginalFetch || window.fetch;
+            fn(v, { credentials: 'same-origin' }).then(function (r) {
+              return r.arrayBuffer();
+            }).then(function (buf) {
+              var bytes = new Uint8Array(buf);
+              if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
+                tryDecompressGzip(bytes, v, 'fetch-scan');
+              } else {
+                try { tryEmitJson(new TextDecoder().decode(bytes), v, 'fetch-scan', null); } catch (e) {}
+              }
+            }).catch(function () {});
+          }
+          return;
+        }
+        if (Array.isArray(v)) { for (var i = 0; i < v.length; i++) scan(v[i], depth + 1); return; }
+        if (typeof v === 'object') { var ks = Object.keys(v); for (var ki = 0; ki < ks.length; ki++) scan(v[ks[ki]], depth + 1); }
+      }(obj, 0));
+    } catch (e) {}
+  }
 
   // --- Перехват XHR ---
   var _originalOpen = XMLHttpRequest.prototype.open;
@@ -321,35 +355,26 @@
       }
     };
 
-    // Строим inject-код для конкретного воркера (с реальным URL внутри)
-    function _ldaMakeInject(ch, realUrl) {
+    // Инъекция только в классические (non-module) воркеры — модульные воркеры не трогаем,
+    // потому что blob-обёртка ломает их инициализацию (self.location, sub-workers и т.д.)
+    function _ldaMakeClassicInject(ch, realUrl) {
       return '(function(CH,RL){'
-        + 'var _OU=typeof URL!=="undefined"?URL:self.URL;'
-        // Resolve relative URL против реального RL
-        + 'var _abs=function(u){if(!u||/^[a-zA-Z][a-zA-Z0-9+\\-.]*:/.test(u))return u;'
-        +   'try{return new _OU(u,RL).href;}catch(e){return u;}};'
-        // BroadcastChannel — данные идут мимо VK-протокола
         + 'var re=/lottie=true|\\.tgs(\\?|$)/;'
         + 'var bc=new BroadcastChannel(CH);'
         + 'var send=function(u,arr){try{bc.postMessage({url:u,data:arr});}catch(e){}};'
-        // fetch hook: resolve relative URLs + перехват lottie-ответов
         + 'if(typeof self.fetch!=="undefined"){'
         +   'var _f=self.fetch;'
         +   'self.fetch=function(input,init){'
         +     'var u=typeof input==="string"?input:(input&&input.url)||"";'
-        // Преобразуем относительный URL в абсолютный через реальный HTTPS-URL воркера
-        +     'u=_abs(u);'
-        +     'var arg0=typeof input==="string"?u:input;'
-        +     'var p=_f.call(this,arg0,init);'
+        +     'var p=_f.apply(this,arguments);'
         +     'if(u&&re.test(u))p.then(function(r){return r.clone().arrayBuffer();})'
         +       '.then(function(b){send(u,new Uint8Array(b));}).catch(function(){});'
         +     'return p;'
         +   '};'
         + '}'
-        // XHR hook
         + 'if(typeof XMLHttpRequest!=="undefined"){'
         +   'var xO=XMLHttpRequest.prototype.open,xS=XMLHttpRequest.prototype.send,xM=new WeakMap();'
-        +   'XMLHttpRequest.prototype.open=function(m,u){_abs(u);xM.set(this,_abs(u)||"");return xO.apply(this,arguments);};'
+        +   'XMLHttpRequest.prototype.open=function(m,u){xM.set(this,u||"");return xO.apply(this,arguments);};'
         +   'XMLHttpRequest.prototype.send=function(){'
         +     'var x=this,u=xM.get(x)||"";'
         +     'if(u&&re.test(u))x.addEventListener("load",function(){'
@@ -363,19 +388,12 @@
 
     window.Worker = function (scriptURL, options) {
       var isModule = options && options.type === 'module';
-      if (typeof scriptURL === 'string' && /^https?:/.test(scriptURL)) {
+      // Модульные воркеры (MAX, Vite) НЕ оборачиваем — это ломает их инициализацию
+      if (!isModule && typeof scriptURL === 'string' && /^https?:/.test(scriptURL)) {
         try {
-          var inject = _ldaMakeInject(_LDA_CH, scriptURL);
-          var src, wOpts;
-          if (isModule) {
-            src = inject + 'await import(' + JSON.stringify(scriptURL) + ');\n';
-            wOpts = { type: 'module' };
-          } else {
-            src = inject + 'importScripts(' + JSON.stringify(scriptURL) + ');\n';
-            wOpts = options;
-          }
+          var src = _ldaMakeClassicInject(_LDA_CH, scriptURL) + 'importScripts(' + JSON.stringify(scriptURL) + ');\n';
           var blobUrl = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
-          return new _OriginalWorker(blobUrl, wOpts);
+          return new _OriginalWorker(blobUrl, options);
         } catch (e) {}
       }
       return new _OriginalWorker(scriptURL, options);
