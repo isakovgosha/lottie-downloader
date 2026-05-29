@@ -56,6 +56,7 @@
       { type: 'GET_ANIMATION_DATA', animationId: animationId },
       function (data) {
         if (chrome.runtime.lastError || !data) return;
+        if (!thumbEl.isConnected) return; // карточка уже удалена (popup обновился быстрее)
         try {
           // Показываем первый кадр, воспроизводим при наведении
           var animInstance = lottie.loadAnimation({

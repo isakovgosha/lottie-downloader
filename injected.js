@@ -356,8 +356,8 @@
 
     // Инъекция только в классические (non-module) воркеры — модульные воркеры не трогаем,
     // потому что blob-обёртка ломает их инициализацию (self.location, sub-workers и т.д.)
-    function _ldaMakeClassicInject(ch, realUrl) {
-      return '(function(CH,RL){'
+    function _ldaMakeClassicInject(ch) {
+      return '(function(CH){'
         + 'var re=/lottie=true|\\.tgs(\\?|$)/;'
         + 'var bc=new BroadcastChannel(CH);'
         + 'var send=function(u,arr){try{bc.postMessage({url:u,data:arr});}catch(e){}};'
@@ -382,7 +382,7 @@
         +     'return xS.apply(this,arguments);'
         +   '};'
         + '}'
-        + '})(' + JSON.stringify(ch) + ',' + JSON.stringify(realUrl) + ');\n';
+        + '})(' + JSON.stringify(ch) + ');\n';
     }
 
     window.Worker = function (scriptURL, options) {
@@ -390,7 +390,7 @@
       // Модульные воркеры (MAX, Vite) НЕ оборачиваем — это ломает их инициализацию
       if (!isModule && typeof scriptURL === 'string' && /^https?:/.test(scriptURL)) {
         try {
-          var src = _ldaMakeClassicInject(_LDA_CH, scriptURL) + 'importScripts(' + JSON.stringify(scriptURL) + ');\n';
+          var src = _ldaMakeClassicInject(_LDA_CH) + 'importScripts(' + JSON.stringify(scriptURL) + ');\n';
           var blobUrl = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
           return new _OriginalWorker(blobUrl, options);
         } catch (e) {}
@@ -416,8 +416,9 @@
     if (/vk-cdn\.net|st\.vk\.com|vkvideo\.ru|userapi\.com|telegram\.org|t\.me|cdn\.tlgr\.org|cdn4\.telegram|lottiefiles\.com|lottieicon\.com|iconscout\.com|dotlottie|airbnb\.io/.test(url)) return true;
     // Пропускаем типичные API без признаков анимации (авторизация, аналитика, метрики)
     if (/auth|login|logout|track|metric|analytic|pixel|beacon|log\b|csrf|token|session/.test(u)) return false;
-    // Для остальных — берём если путь не имеет расширения (API-эндпоинт, который может вернуть JSON)
-    return /\/[^/]*\.[a-z0-9]{1,6}$/.test(u) === false && u.length < 200;
+    // Для остальных — берём если путь (без домена) не имеет расширения (API-эндпоинт)
+    var path = u.replace(/^https?:\/\/[^/]+/, ''); // убираем схему и домен
+    return /\/[^/]*\.[a-z0-9]{2,6}$/.test(path) === false && u.length < 300;
   }
 
   // --- Шаг 1: достать данные из реестра lottie.getRegisteredAnimations() ---

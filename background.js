@@ -146,6 +146,7 @@ function sourceLabel(source) {
     'fetch-scan': 'Fetch',
     'dom-svg': 'DOM',
     'dom-element': 'DOM',
+    'lottie-registry': 'Lottie API',
   };
   return map[source] || source || 'Unknown';
 }
