@@ -301,20 +301,60 @@
     return _originalSend.apply(this, arguments);
   };
 
+  // --- Хук Worker.postMessage (TGS-стикеры Telegram / MAX, загружаемые в воркерах) ---
+  // Telegram и MAX загружают .tgs через fetch внутри воркера — window.fetch туда не достаёт.
+  // Перехватываем URL в postMessage от main thread к воркеру и скачиваем сами.
+  if (typeof Worker !== 'undefined') {
+    var _OriginalWorker = window.Worker;
+    window.Worker = function (scriptURL, options) {
+      var w = new _OriginalWorker(scriptURL, options);
+      var _origPost = w.postMessage.bind(w);
+      w.postMessage = function (data, transfer) {
+        if (data && typeof data === 'object') {
+          // Telegram: {type:'load', src:'...'} / MAX: {src:'...'} / dotlottie-player: {url:'...'}
+          var candidateKeys = ['src', 'url', 'source', 'file', 'animationUrl'];
+          for (var ki = 0; ki < candidateKeys.length; ki++) {
+            var val = data[candidateKeys[ki]];
+            if (val && typeof val === 'string' && shouldTryParsing(val)) {
+              (function (u) {
+                _originalFetch(u).then(function (r) {
+                  return r.arrayBuffer();
+                }).then(function (buf) {
+                  var bytes = new Uint8Array(buf);
+                  if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
+                    // gzip (.tgs)
+                    tryDecompressGzip(bytes, u, 'worker');
+                  } else {
+                    // обычный JSON
+                    try { tryEmitJson(new TextDecoder().decode(bytes), u, 'worker', null); } catch (e) {}
+                  }
+                }).catch(function () {});
+              }(val));
+              break;
+            }
+          }
+        }
+        return transfer !== undefined ? _origPost(data, transfer) : _origPost(data);
+      };
+      return w;
+    };
+    window.Worker.prototype = _OriginalWorker.prototype;
+  }
+
   // Должны ли мы попытаться распарсить ответ с этого URL?
   function shouldTryParsing(url) {
     if (typeof url !== 'string') return false;
     // Пропускаем служебные схемы браузера
     if (/^(chrome|chrome-extension|moz-extension|about|data|blob):/.test(url)) return false;
     var u = url.split('?')[0].split('#')[0].toLowerCase();
-    // Всегда берём .json и .lottie
-    if (/\.(json|lottie)$/.test(u)) return true;
+    // Всегда берём .json, .lottie, .tgs (gzip Lottie — Telegram/MAX стикеры)
+    if (/\.(json|lottie|tgs)$/.test(u)) return true;
     // Пропускаем явно бинарные/код расширения
     if (/\.(js|mjs|css|png|jpg|jpeg|gif|webp|svg|ico|woff|woff2|ttf|eot|mp4|webm|mp3|wav|ogg|zip|gz|pdf|map|ts|m3u8)$/.test(u)) return false;
     // Берём URL, в которых есть признаки данных анимации (icon/media/render убраны — слишком широкие)
     if (/lottie|animation|sticker|asset|player|anim/.test(u)) return true;
     // Берём известные CDN и API-домены с анимациями
-    if (/vk-cdn\.net|st\.vk\.com|vkvideo\.ru|userapi\.com|lottiefiles\.com|lottieicon\.com|iconscout\.com|dotlottie|airbnb\.io/.test(url)) return true;
+    if (/vk-cdn\.net|st\.vk\.com|vkvideo\.ru|userapi\.com|telegram\.org|t\.me|cdn\.tlgr\.org|cdn4\.telegram|lottiefiles\.com|lottieicon\.com|iconscout\.com|dotlottie|airbnb\.io/.test(url)) return true;
     // Пропускаем типичные API без признаков анимации (авторизация, аналитика, метрики)
     if (/auth|login|logout|track|metric|analytic|pixel|beacon|log\b|csrf|token|session/.test(u)) return false;
     // Для остальных — берём если путь не имеет расширения (API-эндпоинт, который может вернуть JSON)
