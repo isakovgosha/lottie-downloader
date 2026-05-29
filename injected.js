@@ -221,6 +221,27 @@
   hookGlobal('lottie');
   hookGlobal('bodymovin');
 
+  // --- Хук URL.createObjectURL (Telegram: TGS приходит через MTProto → Blob → blob URL) ---
+  // Telegram Web создаёт Blob из gzip-данных TGS и передаёт blob URL в rlottie-воркер.
+  // Перехватываем в момент создания blob URL — до того как данные уходят в воркер.
+  if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+    var _origCreateObjectURL = URL.createObjectURL;
+    URL.createObjectURL = function (blob) {
+      var url = _origCreateObjectURL.call(URL, blob);
+      // Проверяем только разумные по размеру Blob (TGS обычно 5–500 КБ)
+      if (blob instanceof Blob && blob.size > 100 && blob.size < 2000000) {
+        blob.arrayBuffer().then(function (buf) {
+          var bytes = new Uint8Array(buf);
+          // gzip magic bytes — только тогда пробуем как TGS
+          if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
+            tryDecompressGzip(bytes, url, 'blob');
+          }
+        }).catch(function () {});
+      }
+      return url;
+    };
+  }
+
   // --- Перехват fetch ---
   // Сохраняем оригинал ДО оборачивания, чтобы fetchAndEmit не зациклился
   window.__ldaOriginalFetch = window.fetch;

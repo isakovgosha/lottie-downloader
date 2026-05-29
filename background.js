@@ -147,6 +147,7 @@ function sourceLabel(source) {
     'dom-svg': 'DOM',
     'dom-element': 'DOM',
     'lottie-registry': 'Lottie API',
+    blob: 'Blob',
   };
   return map[source] || source || 'Unknown';
 }
