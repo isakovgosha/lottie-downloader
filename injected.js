@@ -348,6 +348,7 @@
 
     window.Worker = function (scriptURL, options) {
       var isModule = options && options.type === 'module';
+      console.log('[LDA] new Worker()', typeof scriptURL === 'string' ? scriptURL.slice(0, 80) : typeof scriptURL, 'module:', isModule);
 
       // Blob-инъекция: только для http(s) не-модульных воркеров
       if (!isModule && typeof scriptURL === 'string' && /^https?:/.test(scriptURL)) {
