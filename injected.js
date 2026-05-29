@@ -91,6 +91,27 @@
     return null;
   }
 
+  // --- Распаковка gzip (TGS / VK-стикеры) ---
+  function tryDecompressGzip(bytes, url, source) {
+    if (typeof DecompressionStream === 'undefined') return;
+    if (bytes[0] !== 0x1f || bytes[1] !== 0x8b) return; // не gzip
+    var ds = new DecompressionStream('gzip');
+    var writer = ds.writable.getWriter();
+    var reader = ds.readable.getReader();
+    var chunks = [];
+    (function read() {
+      reader.read().then(function (r) {
+        if (r.done) {
+          var len = chunks.reduce(function (a, c) { return a + c.length; }, 0);
+          var merged = new Uint8Array(len);
+          var off = 0; chunks.forEach(function (c) { merged.set(c, off); off += c.length; });
+          try { tryEmitJson(new TextDecoder().decode(merged), url, source, null); } catch (e) {}
+        } else { chunks.push(r.value); read(); }
+      }).catch(function () {});
+    }());
+    try { writer.write(bytes); writer.close(); } catch (e) {}
+  }
+
   // --- Парсинг и отправка JSON-текста ---
   function tryEmitJson(text, sourceUrl, source, container) {
     if (!text || text.length < 25 || text.length > 8000000) return; // <25 байт или >8МБ — пропуск
@@ -225,8 +246,17 @@
           return;
         }
 
+        // .tgs / gzip-сжатый Lottie JSON (VK, Telegram-стикеры)
+        var isTgs = urlPath.endsWith('.tgs') || ct.includes('octet-stream');
+        if (isTgs) {
+          resp.clone().arrayBuffer().then(function (buf) {
+            tryDecompressGzip(new Uint8Array(buf), url, 'fetch');
+          }).catch(function () {});
+          return;
+        }
+
         // Пропускаем явно бинарные типы (но не application/json и text/*)
-        if (/text\/html|text\/css|image\/|video\/|audio\/|font\/|application\/(javascript|pdf|octet-stream|wasm)/.test(ct)) return;
+        if (/text\/html|text\/css|image\/|video\/|audio\/|font\/|application\/(javascript|pdf|wasm)/.test(ct)) return;
         // Пропускаем по размеру если Content-Length известен
         var cl = parseInt(resp.headers.get('content-length') || '-1', 10);
         if (cl >= 0 && (cl < 500 || cl > 8000000)) return;
@@ -255,9 +285,14 @@
     if (url && shouldTryParsing(url)) {
       self.addEventListener('load', function () {
         try {
+          var ct = self.getResponseHeader('content-type') || '';
+          // arraybuffer — проверяем на gzip (TGS / VK-стикеры)
+          if (self.responseType === 'arraybuffer' && self.response instanceof ArrayBuffer) {
+            tryDecompressGzip(new Uint8Array(self.response), url, 'xhr');
+            return;
+          }
           // responseText недоступен при responseType !== '' | 'text' — бросает InvalidStateError
           if (self.responseType && self.responseType !== '' && self.responseType !== 'text') return;
-          var ct = self.getResponseHeader('content-type') || '';
           if (ct && /image\/|video\/|audio\/|font\/|application\/(zip|pdf|octet-stream|wasm)/.test(ct)) return;
           tryEmitJson(self.responseText, url, 'xhr', null);
         } catch (e) {}
