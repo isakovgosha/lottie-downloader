@@ -301,34 +301,69 @@
     return _originalSend.apply(this, arguments);
   };
 
-  // --- Хук Worker.postMessage (TGS-стикеры Telegram / MAX, загружаемые в воркерах) ---
-  // Telegram и MAX загружают .tgs через fetch внутри воркера — window.fetch туда не достаёт.
-  // Перехватываем URL в postMessage от main thread к воркеру и скачиваем сами.
+  // --- Хук Worker (инъекция fetch-перехватчика внутрь воркера) ---
+  // MAX/Telegram: воркер сам конструирует URL и вызывает fetch изнутри.
+  // window.fetch там не виден. Решение: оборачиваем воркер через blob + importScripts,
+  // вставляя наш fetch-хук до запуска оригинального скрипта.
   if (typeof Worker !== 'undefined') {
     var _OriginalWorker = window.Worker;
+
+    // Код, исполняемый внутри воркера — перехватывает fetch и отправляет Lottie-данные обратно
+    var _WORKER_INJECT = '(function(){'
+      + 'var _f=self.fetch;'
+      + 'self.fetch=function(input,init){'
+      +   'var u=typeof input==="string"?input:(input&&input.url)||"";'
+      +   'var p=_f.apply(this,arguments);'
+      +   'if(u&&/lottie=true|\\.tgs(\\?|$)/.test(u)){'
+      +     'p.then(function(r){return r.clone().arrayBuffer();})'
+      +      '.then(function(b){try{self.postMessage({__lda:1,url:u,buf:b},[b]);}catch(e){}})'
+      +      '.catch(function(){});'
+      +   '}'
+      +   'return p;'
+      + '};'
+      + '})();';
+
     window.Worker = function (scriptURL, options) {
-      var w = new _OriginalWorker(scriptURL, options);
-      var _origPost = w.postMessage.bind(w);
-      w.postMessage = function (data, transfer) {
+      var isModule = options && options.type === 'module';
+
+      // Blob-инъекция: только для http(s) не-модульных воркеров
+      if (!isModule && typeof scriptURL === 'string' && /^https?:/.test(scriptURL)) {
+        try {
+          var src = _WORKER_INJECT + '\nimportScripts(' + JSON.stringify(scriptURL) + ');';
+          var blob = new Blob([src], { type: 'text/javascript' });
+          var blobUrl = URL.createObjectURL(blob);
+          var w = new _OriginalWorker(blobUrl, options);
+          // Принимаем перехваченные данные от нашего хука внутри воркера
+          w.addEventListener('message', function (ev) {
+            if (ev.data && ev.data.__lda === 1 && ev.data.buf instanceof ArrayBuffer) {
+              var bytes = new Uint8Array(ev.data.buf);
+              if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
+                tryDecompressGzip(bytes, ev.data.url, 'worker');
+              } else {
+                try { tryEmitJson(new TextDecoder().decode(bytes), ev.data.url, 'worker', null); } catch (e) {}
+              }
+            }
+          });
+          return w;
+        } catch (e) { /* CSP или другая ошибка — fallback */ }
+      }
+
+      // Fallback: обычный воркер + перехват postMessage (если URL передаётся явно)
+      var w2 = new _OriginalWorker(scriptURL, options);
+      var _origPost = w2.postMessage.bind(w2);
+      w2.postMessage = function (data, transfer) {
         if (data && typeof data === 'object') {
-          // Telegram: {type:'load', src:'...'} / MAX: {src:'...'} / dotlottie-player: {url:'...'}
-          var candidateKeys = ['src', 'url', 'source', 'file', 'animationUrl'];
-          for (var ki = 0; ki < candidateKeys.length; ki++) {
-            var val = data[candidateKeys[ki]];
+          var keys = ['src', 'url', 'source', 'file', 'animationUrl'];
+          for (var ki = 0; ki < keys.length; ki++) {
+            var val = data[keys[ki]];
             if (val && typeof val === 'string' && shouldTryParsing(val)) {
               (function (u) {
-                _originalFetch(u).then(function (r) {
-                  return r.arrayBuffer();
-                }).then(function (buf) {
-                  var bytes = new Uint8Array(buf);
-                  if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
-                    // gzip (.tgs)
-                    tryDecompressGzip(bytes, u, 'worker');
-                  } else {
-                    // обычный JSON
-                    try { tryEmitJson(new TextDecoder().decode(bytes), u, 'worker', null); } catch (e) {}
-                  }
-                }).catch(function () {});
+                _originalFetch(u).then(function (r) { return r.arrayBuffer(); })
+                  .then(function (buf) {
+                    var bytes = new Uint8Array(buf);
+                    if (bytes[0] === 0x1f && bytes[1] === 0x8b) tryDecompressGzip(bytes, u, 'worker');
+                    else try { tryEmitJson(new TextDecoder().decode(bytes), u, 'worker', null); } catch (e) {}
+                  }).catch(function () {});
               }(val));
               break;
             }
@@ -336,7 +371,7 @@
         }
         return transfer !== undefined ? _origPost(data, transfer) : _origPost(data);
       };
-      return w;
+      return w2;
     };
     window.Worker.prototype = _OriginalWorker.prototype;
   }
