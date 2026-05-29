@@ -308,19 +308,42 @@
   if (typeof Worker !== 'undefined') {
     var _OriginalWorker = window.Worker;
 
-    // Код, исполняемый внутри воркера — перехватывает fetch и отправляет Lottie-данные обратно
+    // Код, исполняемый внутри воркера — перехватывает fetch+XHR и отправляет Lottie-данные обратно
     var _WORKER_INJECT = '(function(){'
-      + 'var _f=self.fetch;'
-      + 'self.fetch=function(input,init){'
-      +   'var u=typeof input==="string"?input:(input&&input.url)||"";'
-      +   'var p=_f.apply(this,arguments);'
-      +   'if(u&&/lottie=true|\\.tgs(\\?|$)/.test(u)){'
-      +     'p.then(function(r){return r.clone().arrayBuffer();})'
-      +      '.then(function(b){try{self.postMessage({__lda:1,url:u,buf:b},[b]);}catch(e){}})'
-      +      '.catch(function(){});'
-      +   '}'
-      +   'return p;'
-      + '};'
+      + 'var _lda_re=/lottie=true|\\.tgs(\\?|$)/;'
+      + 'var _lda_send=function(u,buf){try{self.postMessage({__lda:1,url:u,buf:buf},[buf]);}catch(e){}};'
+      // fetch hook
+      + 'if(typeof self.fetch!=="undefined"){'
+      +   'var _f=self.fetch;'
+      +   'self.fetch=function(input,init){'
+      +     'var u=typeof input==="string"?input:(input&&input.url)||"";'
+      +     'var p=_f.apply(this,arguments);'
+      +     'if(u&&_lda_re.test(u)){'
+      +       'p.then(function(r){return r.clone().arrayBuffer();})'
+      +        '.then(function(b){_lda_send(u,b);})'
+      +        '.catch(function(){});'
+      +     '}'
+      +     'return p;'
+      +   '};'
+      + '}'
+      // XHR hook (Emscripten/ThorVG может использовать XHR)
+      + 'if(typeof XMLHttpRequest!=="undefined"){'
+      +   'var _xOpen=XMLHttpRequest.prototype.open,_xSend=XMLHttpRequest.prototype.send,_xUrls=new WeakMap();'
+      +   'XMLHttpRequest.prototype.open=function(m,u){_xUrls.set(this,u||"");return _xOpen.apply(this,arguments);};'
+      +   'XMLHttpRequest.prototype.send=function(){'
+      +     'var x=this,u=_xUrls.get(x)||"";'
+      +     'if(u&&_lda_re.test(u)){'
+      +       'x.addEventListener("load",function(){'
+      +         'var b=x.response;'
+      +         'if(b instanceof ArrayBuffer)_lda_send(u,b.slice(0));'
+      +         'else if(typeof b==="string"||b instanceof Uint8Array){try{var ab=new TextEncoder().encode(b).buffer;_lda_send(u,ab);}catch(e){}}'
+      +       '});'
+      +       'if(!x.responseType||x.responseType==="")x.responseType="arraybuffer";'
+      +     '}'
+      +     'return _xSend.apply(this,arguments);'
+      +   '};'
+      + '}'
+      + 'self.postMessage({__lda_ready:1});'  // сигнал что инъекция готова
       + '})();';
 
     window.Worker = function (scriptURL, options) {
@@ -335,7 +358,13 @@
           var w = new _OriginalWorker(blobUrl, options);
           // Принимаем перехваченные данные от нашего хука внутри воркера
           w.addEventListener('message', function (ev) {
-            if (ev.data && ev.data.__lda === 1 && ev.data.buf instanceof ArrayBuffer) {
+            if (!ev.data) return;
+            if (ev.data.__lda_ready) {
+              console.log('[LDA] Worker injected OK:', scriptURL.slice(-40));
+              return;
+            }
+            if (ev.data.__lda === 1 && ev.data.buf instanceof ArrayBuffer) {
+              console.log('[LDA] Worker data received:', ev.data.url.slice(0, 80));
               var bytes = new Uint8Array(ev.data.buf);
               if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
                 tryDecompressGzip(bytes, ev.data.url, 'worker');
@@ -345,7 +374,9 @@
             }
           });
           return w;
-        } catch (e) { /* CSP или другая ошибка — fallback */ }
+        } catch (e) {
+          console.log('[LDA] Worker wrap failed:', e.message);
+        }
       }
 
       // Fallback: обычный воркер + перехват postMessage (если URL передаётся явно)
