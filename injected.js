@@ -285,8 +285,7 @@
           if (v.length > 8 && v.length < 2000 && /lottie=true|\.tgs(\?|$)|lottie.*\.json/.test(v)
               && !_ldaScannedUrls.has(v)) {
             _ldaScannedUrls.add(v);
-            var fn = window.__ldaOriginalFetch || window.fetch;
-            fn(v, { credentials: 'same-origin' }).then(function (r) {
+            _originalFetch(v, { credentials: 'same-origin' }).then(function (r) {
               return r.arrayBuffer();
             }).then(function (buf) {
               var bytes = new Uint8Array(buf);

@@ -53,7 +53,6 @@ if (chrome.webRequest && chrome.webRequest.onBeforeRequest) {
         var bytes = new Uint8Array(buf);
         // gzip magic: 1f 8b
         var isGzip = bytes[0] === 0x1f && bytes[1] === 0x8b;
-        var json;
         if (isGzip) {
           if (typeof DecompressionStream === 'undefined') return;
           var ds = new DecompressionStream('gzip');
@@ -74,7 +73,10 @@ if (chrome.webRequest && chrome.webRequest.onBeforeRequest) {
         } else {
           try { _ldaTryInjectJson(new TextDecoder().decode(bytes), url, details.tabId); } catch (e) {}
         }
-      }).catch(function () {});
+      }).catch(function () {
+        // Убираем из seen чтобы можно было повторить при следующем запросе
+        _webReqSeen.delete(url);
+      });
     },
     { urls: ['<all_urls>'], types: ['xmlhttprequest', 'other'] },
     []
@@ -91,8 +93,6 @@ function _ldaTryInjectJson(text, sourceUrl, tabId) {
     if (!data || !Array.isArray(data.layers)) return;
     if (tabId && tabId > 0) {
       handleDetected(tabId, { animationData: data, source: 'worker', sourceUrl: sourceUrl }, function () {});
-      // Уведомляем попап если открыт
-      chrome.runtime.sendMessage({ type: 'ANIMATIONS_UPDATED', tabId: tabId }).catch(function () {});
     }
   } catch (e) {}
 }
@@ -141,6 +141,11 @@ function sourceLabel(source) {
     xhr: 'XHR',
     webcomponent: 'Web Component',
     dotlottie: '.lottie',
+    worker: 'Worker',
+    'worker-fetch': 'Worker',
+    'fetch-scan': 'Fetch',
+    'dom-svg': 'DOM',
+    'dom-element': 'DOM',
   };
   return map[source] || source || 'Unknown';
 }
