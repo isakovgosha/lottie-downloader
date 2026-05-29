@@ -301,122 +301,73 @@
     return _originalSend.apply(this, arguments);
   };
 
-  // --- Хук Worker (инъекция fetch-перехватчика внутрь воркера) ---
-  // MAX/Telegram: воркер сам конструирует URL и вызывает fetch изнутри.
-  // window.fetch там не виден. Решение: оборачиваем воркер через blob + importScripts,
-  // вставляя наш fetch-хук до запуска оригинального скрипта.
-  if (typeof Worker !== 'undefined') {
+  // --- Хук Worker (инъекция через BroadcastChannel — без вмешательства в протокол воркера) ---
+  // MAX/Telegram: воркер-ES-модуль сам конструирует URL и вызывает fetch изнутри.
+  // Данные отправляются через BroadcastChannel, а не self.postMessage — VK не видит наши сообщения.
+  if (typeof Worker !== 'undefined' && typeof BroadcastChannel !== 'undefined') {
     var _OriginalWorker = window.Worker;
+    var _LDA_CH = '__lda_w_' + Math.random().toString(36).slice(2);
 
-    // Код, исполняемый внутри воркера — перехватывает fetch+XHR и отправляет Lottie-данные обратно
-    var _WORKER_INJECT = '(function(){'
-      + 'var _lda_re=/lottie=true|\\.tgs(\\?|$)/;'
-      + 'var _lda_send=function(u,buf){try{self.postMessage({__lda:1,url:u,buf:buf},[buf]);}catch(e){}};'
+    // Слушаем данные от воркеров на главном потоке
+    var _ldaBC = new BroadcastChannel(_LDA_CH);
+    _ldaBC.onmessage = function (ev) {
+      if (!ev.data || !ev.data.url) return;
+      var bytes = ev.data.data instanceof Uint8Array ? ev.data.data : new Uint8Array(ev.data.data || []);
+      if (bytes.length === 0) return;
+      if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
+        tryDecompressGzip(bytes, ev.data.url, 'worker');
+      } else {
+        try { tryEmitJson(new TextDecoder().decode(bytes), ev.data.url, 'worker', null); } catch (e) {}
+      }
+    };
+
+    // Код, инжектируемый в воркер — отправляет данные через BroadcastChannel
+    var _WORKER_INJECT = '(function(CH){'
+      + 'var re=/lottie=true|\\.tgs(\\?|$)/;'
+      + 'var bc=new BroadcastChannel(CH);'
+      + 'var send=function(u,arr){try{bc.postMessage({url:u,data:arr});}catch(e){}};'
       // fetch hook
       + 'if(typeof self.fetch!=="undefined"){'
       +   'var _f=self.fetch;'
       +   'self.fetch=function(input,init){'
       +     'var u=typeof input==="string"?input:(input&&input.url)||"";'
       +     'var p=_f.apply(this,arguments);'
-      +     'if(u&&_lda_re.test(u)){'
-      +       'p.then(function(r){return r.clone().arrayBuffer();})'
-      +        '.then(function(b){_lda_send(u,b);})'
-      +        '.catch(function(){});'
-      +     '}'
+      +     'if(u&&re.test(u))p.then(function(r){return r.clone().arrayBuffer();})'
+      +       '.then(function(b){send(u,new Uint8Array(b));}).catch(function(){});'
       +     'return p;'
       +   '};'
       + '}'
-      // XHR hook (Emscripten/ThorVG может использовать XHR)
+      // XHR hook
       + 'if(typeof XMLHttpRequest!=="undefined"){'
-      +   'var _xOpen=XMLHttpRequest.prototype.open,_xSend=XMLHttpRequest.prototype.send,_xUrls=new WeakMap();'
-      +   'XMLHttpRequest.prototype.open=function(m,u){_xUrls.set(this,u||"");return _xOpen.apply(this,arguments);};'
+      +   'var xO=XMLHttpRequest.prototype.open,xS=XMLHttpRequest.prototype.send,xM=new WeakMap();'
+      +   'XMLHttpRequest.prototype.open=function(m,u){xM.set(this,u||"");return xO.apply(this,arguments);};'
       +   'XMLHttpRequest.prototype.send=function(){'
-      +     'var x=this,u=_xUrls.get(x)||"";'
-      +     'if(u&&_lda_re.test(u)){'
-      +       'x.addEventListener("load",function(){'
-      +         'var b=x.response;'
-      +         'if(b instanceof ArrayBuffer)_lda_send(u,b.slice(0));'
-      +         'else if(typeof b==="string"||b instanceof Uint8Array){try{var ab=new TextEncoder().encode(b).buffer;_lda_send(u,ab);}catch(e){}}'
-      +       '});'
-      +       'if(!x.responseType||x.responseType==="")x.responseType="arraybuffer";'
-      +     '}'
-      +     'return _xSend.apply(this,arguments);'
+      +     'var x=this,u=xM.get(x)||"";'
+      +     'if(u&&re.test(u))x.addEventListener("load",function(){'
+      +       'var b=x.response;if(b instanceof ArrayBuffer)send(u,new Uint8Array(b));'
+      +     '});'
+      +     'return xS.apply(this,arguments);'
       +   '};'
       + '}'
-      + 'self.postMessage({__lda_ready:1});'  // сигнал что инъекция готова
-      + '})();';
-
-    // Общий обработчик сообщений от инжектированного воркера
-    function _ldaWorkerMsg(scriptURL, ev) {
-      if (!ev.data) return;
-      if (ev.data.__lda_ready) {
-        console.log('[LDA] Worker injected OK:', scriptURL.slice(-50));
-        return;
-      }
-      if (ev.data.__lda === 1 && ev.data.buf instanceof ArrayBuffer) {
-        console.log('[LDA] Worker data received:', ev.data.url.slice(0, 80));
-        var bytes = new Uint8Array(ev.data.buf);
-        if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
-          tryDecompressGzip(bytes, ev.data.url, 'worker');
-        } else {
-          try { tryEmitJson(new TextDecoder().decode(bytes), ev.data.url, 'worker', null); } catch (e) {}
-        }
-      }
-    }
+      + '})(' + JSON.stringify(_LDA_CH) + ');\n';
 
     window.Worker = function (scriptURL, options) {
       var isModule = options && options.type === 'module';
-      var isHttp = typeof scriptURL === 'string' && /^https?:/.test(scriptURL);
-
-      if (isHttp) {
+      if (typeof scriptURL === 'string' && /^https?:/.test(scriptURL)) {
         try {
-          var wBlob, wOpts;
+          var src, wOpts;
           if (isModule) {
-            // ES-модульный воркер (MAX/Vite): используем await import() + top-level code
-            var modSrc = _WORKER_INJECT.replace('})();', '') // убираем закрывающую скобку IIFE
-              + '\n})();\n'
-              + 'await import(' + JSON.stringify(scriptURL) + ');\n';
-            wBlob = new Blob([modSrc], { type: 'text/javascript' });
+            src = _WORKER_INJECT + 'await import(' + JSON.stringify(scriptURL) + ');\n';
             wOpts = { type: 'module' };
           } else {
-            // Классический воркер: importScripts
-            var clSrc = _WORKER_INJECT + '\nimportScripts(' + JSON.stringify(scriptURL) + ');\n';
-            wBlob = new Blob([clSrc], { type: 'text/javascript' });
+            src = _WORKER_INJECT + 'importScripts(' + JSON.stringify(scriptURL) + ');\n';
             wOpts = options;
           }
-          var blobUrl = URL.createObjectURL(wBlob);
-          var w = new _OriginalWorker(blobUrl, wOpts);
-          w.addEventListener('message', _ldaWorkerMsg.bind(null, scriptURL));
-          return w;
-        } catch (e) {
-          console.log('[LDA] Worker wrap failed:', e.message);
-        }
+          var blobUrl = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+          return new _OriginalWorker(blobUrl, wOpts);
+        } catch (e) {}
       }
-
-      // Fallback: обычный воркер + перехват postMessage (если URL передаётся явно)
-      var w2 = new _OriginalWorker(scriptURL, options);
-      var _origPost = w2.postMessage.bind(w2);
-      w2.postMessage = function (data, transfer) {
-        if (data && typeof data === 'object') {
-          var keys = ['src', 'url', 'source', 'file', 'animationUrl'];
-          for (var ki = 0; ki < keys.length; ki++) {
-            var val = data[keys[ki]];
-            if (val && typeof val === 'string' && shouldTryParsing(val)) {
-              (function (u) {
-                _originalFetch(u).then(function (r) { return r.arrayBuffer(); })
-                  .then(function (buf) {
-                    var bytes = new Uint8Array(buf);
-                    if (bytes[0] === 0x1f && bytes[1] === 0x8b) tryDecompressGzip(bytes, u, 'worker');
-                    else try { tryEmitJson(new TextDecoder().decode(bytes), u, 'worker', null); } catch (e) {}
-                  }).catch(function () {});
-              }(val));
-              break;
-            }
-          }
-        }
-        return transfer !== undefined ? _origPost(data, transfer) : _origPost(data);
-      };
-      return w2;
+      return new _OriginalWorker(scriptURL, options);
     };
     window.Worker.prototype = _OriginalWorker.prototype;
   }
