@@ -324,33 +324,23 @@
     // Строим inject-код для конкретного воркера (с реальным URL внутри)
     function _ldaMakeInject(ch, realUrl) {
       return '(function(CH,RL){'
-        // Подменяем self.location и URL-конструктор, чтобы воркер в blob-контексте
-        // правильно строил относительные URL (self.location.href = blob:... → RL)
-        + 'try{'
-        +   'var _bh=self.location.href;'
-        +   'var _OU=self.URL;'
-        +   'var _rl=new _OU(RL);'
-        +   'Object.defineProperty(self,"location",{configurable:true,get:function(){'
-        +     'return{href:_rl.href,origin:_rl.origin,protocol:_rl.protocol,'
-        +       'host:_rl.host,hostname:_rl.hostname,port:_rl.port,'
-        +       'pathname:_rl.pathname,search:_rl.search,hash:_rl.hash,'
-        +       'toString:function(){return _rl.href;}};'
-        +   '}});'
-        +   'self.URL=function(u,b){return new _OU(u,(!b||b===_bh)?RL:b);};'
-        +   'self.URL.createObjectURL=_OU.createObjectURL.bind(_OU);'
-        +   'self.URL.revokeObjectURL=_OU.revokeObjectURL.bind(_OU);'
-        +   'if(_OU.canParse)self.URL.canParse=_OU.canParse.bind(_OU);'
-        + '}catch(e){}'
+        + 'var _OU=typeof URL!=="undefined"?URL:self.URL;'
+        // Resolve relative URL против реального RL
+        + 'var _abs=function(u){if(!u||/^[a-zA-Z][a-zA-Z0-9+\\-.]*:/.test(u))return u;'
+        +   'try{return new _OU(u,RL).href;}catch(e){return u;}};'
         // BroadcastChannel — данные идут мимо VK-протокола
         + 'var re=/lottie=true|\\.tgs(\\?|$)/;'
         + 'var bc=new BroadcastChannel(CH);'
         + 'var send=function(u,arr){try{bc.postMessage({url:u,data:arr});}catch(e){}};'
-        // fetch hook
+        // fetch hook: resolve relative URLs + перехват lottie-ответов
         + 'if(typeof self.fetch!=="undefined"){'
         +   'var _f=self.fetch;'
         +   'self.fetch=function(input,init){'
         +     'var u=typeof input==="string"?input:(input&&input.url)||"";'
-        +     'var p=_f.apply(this,arguments);'
+        // Преобразуем относительный URL в абсолютный через реальный HTTPS-URL воркера
+        +     'u=_abs(u);'
+        +     'var arg0=typeof input==="string"?u:input;'
+        +     'var p=_f.call(this,arg0,init);'
         +     'if(u&&re.test(u))p.then(function(r){return r.clone().arrayBuffer();})'
         +       '.then(function(b){send(u,new Uint8Array(b));}).catch(function(){});'
         +     'return p;'
@@ -359,7 +349,7 @@
         // XHR hook
         + 'if(typeof XMLHttpRequest!=="undefined"){'
         +   'var xO=XMLHttpRequest.prototype.open,xS=XMLHttpRequest.prototype.send,xM=new WeakMap();'
-        +   'XMLHttpRequest.prototype.open=function(m,u){xM.set(this,u||"");return xO.apply(this,arguments);};'
+        +   'XMLHttpRequest.prototype.open=function(m,u){_abs(u);xM.set(this,_abs(u)||"");return xO.apply(this,arguments);};'
         +   'XMLHttpRequest.prototype.send=function(){'
         +     'var x=this,u=xM.get(x)||"";'
         +     'if(u&&re.test(u))x.addEventListener("load",function(){'
