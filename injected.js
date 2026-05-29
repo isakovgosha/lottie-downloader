@@ -346,34 +346,47 @@
       + 'self.postMessage({__lda_ready:1});'  // сигнал что инъекция готова
       + '})();';
 
+    // Общий обработчик сообщений от инжектированного воркера
+    function _ldaWorkerMsg(scriptURL, ev) {
+      if (!ev.data) return;
+      if (ev.data.__lda_ready) {
+        console.log('[LDA] Worker injected OK:', scriptURL.slice(-50));
+        return;
+      }
+      if (ev.data.__lda === 1 && ev.data.buf instanceof ArrayBuffer) {
+        console.log('[LDA] Worker data received:', ev.data.url.slice(0, 80));
+        var bytes = new Uint8Array(ev.data.buf);
+        if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
+          tryDecompressGzip(bytes, ev.data.url, 'worker');
+        } else {
+          try { tryEmitJson(new TextDecoder().decode(bytes), ev.data.url, 'worker', null); } catch (e) {}
+        }
+      }
+    }
+
     window.Worker = function (scriptURL, options) {
       var isModule = options && options.type === 'module';
-      console.log('[LDA] new Worker()', typeof scriptURL === 'string' ? scriptURL.slice(0, 80) : typeof scriptURL, 'module:', isModule);
+      var isHttp = typeof scriptURL === 'string' && /^https?:/.test(scriptURL);
 
-      // Blob-инъекция: только для http(s) не-модульных воркеров
-      if (!isModule && typeof scriptURL === 'string' && /^https?:/.test(scriptURL)) {
+      if (isHttp) {
         try {
-          var src = _WORKER_INJECT + '\nimportScripts(' + JSON.stringify(scriptURL) + ');';
-          var blob = new Blob([src], { type: 'text/javascript' });
-          var blobUrl = URL.createObjectURL(blob);
-          var w = new _OriginalWorker(blobUrl, options);
-          // Принимаем перехваченные данные от нашего хука внутри воркера
-          w.addEventListener('message', function (ev) {
-            if (!ev.data) return;
-            if (ev.data.__lda_ready) {
-              console.log('[LDA] Worker injected OK:', scriptURL.slice(-40));
-              return;
-            }
-            if (ev.data.__lda === 1 && ev.data.buf instanceof ArrayBuffer) {
-              console.log('[LDA] Worker data received:', ev.data.url.slice(0, 80));
-              var bytes = new Uint8Array(ev.data.buf);
-              if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
-                tryDecompressGzip(bytes, ev.data.url, 'worker');
-              } else {
-                try { tryEmitJson(new TextDecoder().decode(bytes), ev.data.url, 'worker', null); } catch (e) {}
-              }
-            }
-          });
+          var wBlob, wOpts;
+          if (isModule) {
+            // ES-модульный воркер (MAX/Vite): используем await import() + top-level code
+            var modSrc = _WORKER_INJECT.replace('})();', '') // убираем закрывающую скобку IIFE
+              + '\n})();\n'
+              + 'await import(' + JSON.stringify(scriptURL) + ');\n';
+            wBlob = new Blob([modSrc], { type: 'text/javascript' });
+            wOpts = { type: 'module' };
+          } else {
+            // Классический воркер: importScripts
+            var clSrc = _WORKER_INJECT + '\nimportScripts(' + JSON.stringify(scriptURL) + ');\n';
+            wBlob = new Blob([clSrc], { type: 'text/javascript' });
+            wOpts = options;
+          }
+          var blobUrl = URL.createObjectURL(wBlob);
+          var w = new _OriginalWorker(blobUrl, wOpts);
+          w.addEventListener('message', _ldaWorkerMsg.bind(null, scriptURL));
           return w;
         } catch (e) {
           console.log('[LDA] Worker wrap failed:', e.message);
