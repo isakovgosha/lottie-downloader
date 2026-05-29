@@ -7,7 +7,8 @@
     "scripting",
     "downloads",
     "storage",
-    "activeTab"
+    "activeTab",
+    "webRequest"
   ],
   "host_permissions": ["<all_urls>"],
   "background": {

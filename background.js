@@ -37,6 +37,66 @@ async function registerInjectedScript() {
 chrome.runtime.onInstalled.addListener(registerInjectedScript);
 chrome.runtime.onStartup.addListener(registerInjectedScript);
 
+// ── webRequest: перехват TGS/Lottie из воркеров (MAX, Telegram и др.) ────────
+// Воркеры обходят window.fetch — но chrome.webRequest видит все запросы браузера.
+// Когда замечаем URL с lottie=true или .tgs, скачиваем из background и обрабатываем.
+var _webReqSeen = new Set();
+if (chrome.webRequest && chrome.webRequest.onBeforeRequest) {
+  chrome.webRequest.onBeforeRequest.addListener(
+    function (details) {
+      var url = details.url;
+      if (!/lottie=true|\.tgs(\?|$)/.test(url)) return;
+      if (_webReqSeen.has(url)) return;
+      _webReqSeen.add(url);
+      // Скачиваем из background (sig= в URL — это и есть аутентификация)
+      fetch(url).then(function (r) { return r.arrayBuffer(); }).then(function (buf) {
+        var bytes = new Uint8Array(buf);
+        // gzip magic: 1f 8b
+        var isGzip = bytes[0] === 0x1f && bytes[1] === 0x8b;
+        var json;
+        if (isGzip) {
+          if (typeof DecompressionStream === 'undefined') return;
+          var ds = new DecompressionStream('gzip');
+          var writer = ds.writable.getWriter();
+          var reader = ds.readable.getReader();
+          var chunks = [];
+          (function read() {
+            reader.read().then(function (r2) {
+              if (r2.done) {
+                var len = chunks.reduce(function (a, c) { return a + c.length; }, 0);
+                var merged = new Uint8Array(len);
+                var off = 0; chunks.forEach(function (c) { merged.set(c, off); off += c.length; });
+                _ldaTryInjectJson(new TextDecoder().decode(merged), url, details.tabId);
+              } else { chunks.push(r2.value); read(); }
+            }).catch(function () {});
+          }());
+          try { writer.write(bytes); writer.close(); } catch (e) {}
+        } else {
+          try { _ldaTryInjectJson(new TextDecoder().decode(bytes), url, details.tabId); } catch (e) {}
+        }
+      }).catch(function () {});
+    },
+    { urls: ['<all_urls>'], types: ['xmlhttprequest', 'other'] },
+    []
+  );
+}
+
+function _ldaTryInjectJson(text, sourceUrl, tabId) {
+  if (!text || text.length < 25) return;
+  var first = text.trim()[0];
+  if (first !== '{') return;
+  if (text.indexOf('"layers"') === -1) return;
+  try {
+    var data = JSON.parse(text);
+    if (!data || !Array.isArray(data.layers)) return;
+    if (tabId && tabId > 0) {
+      handleDetected(tabId, { animationData: data, source: 'worker', sourceUrl: sourceUrl }, function () {});
+      // Уведомляем попап если открыт
+      chrome.runtime.sendMessage({ type: 'ANIMATIONS_UPDATED', tabId: tabId }).catch(function () {});
+    }
+  } catch (e) {}
+}
+
 // ── Очистка при закрытии вкладки ─────────────────────────────────────────────
 chrome.tabs.onRemoved.addListener(function (tabId) {
   var animations = getAnimations(tabId); // сохраняем список ДО удаления из Map
